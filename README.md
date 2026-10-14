@@ -25,12 +25,21 @@
 
 ## 安装
 
-在 Harness 里安装这个 bundle：
+本插件以 **npm 包**发布，用 Harness 自带的插件命令安装到 web profile：
 
-1. 打开 **侧边栏 → 插件**，在安装入口填入包名 `@kongxiangyiren/dsh-notifier`（本地开发则填目录绝对路径）；
-2. 安装后插件行即生效。想先验证投递链路，可以把配置里的 **`onStartup` 设为 `true`**，下次加载插件时会发一条测试通知。
+```bash
+# 已经装了 dsh 命令
+dsh plugin --profile web add @kongxiangyiren/dsh-notifier
 
-> 安装的是 Host bundle：Host 半体 `dist/index.mjs` 负责监听与投递，Client 半体 `dist/client.js` 提供上面的配置表单。
+# 或者不装全局，直接用 npx
+npx @deepseek-ai/dsh plugin --profile web add @kongxiangyiren/dsh-notifier
+```
+
+`--profile web` 指定装入哪个 profile，换成你实际使用的名字即可。安装完成后插件行即生效。
+
+想先验证投递链路：把配置里的 **`onStartup` 设为 `true`**，下次加载插件时会发一条测试通知。
+
+> 安装的是 Host bundle：Host 半体 `dist/index.mjs` 负责监听与投递，Client 半体 `dist/client.js` 提供插件页里的配置表单。
 
 ## 使用
 
