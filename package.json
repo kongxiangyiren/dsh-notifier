@@ -1,0 +1,85 @@
+{
+  "name": "@kongxiangyiren/dsh-notifier",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "在对话完成或需要用户确认时发出 Windows 系统通知的 DeepSeek Harness 插件 (Windows toast notifications when a turn finishes or your confirmation is needed)",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "author": {
+    "name": "空巷一人"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kongxiangyiren/dsh-notifier.git"
+  },
+  "homepage": "https://github.com/kongxiangyiren/dsh-notifier#readme",
+  "bugs": {
+    "url": "https://github.com/kongxiangyiren/dsh-notifier/issues"
+  },
+  "icon": "./assets/deepseek.png",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./client": "./dist/client.js"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "cordis.patch.yml",
+    "locale",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest run --pool=threads",
+    "test:watch": "vitest --pool=threads",
+    "typecheck": "tsc --noEmit",
+    "release": "bumpp",
+    "prepublishOnly": "pnpm run build",
+    "prepare": "pnpm run build"
+  },
+  "dependencies": {
+    "node-notifier": "^11.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
+    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-modules": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session-title": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-user-questions": "0.2.0-rc.2",
+    "@types/node": "^26.1.1",
+    "@types/react": "^18.3.31",
+    "bumpp": "^12.3.0",
+    "tsdown": "^0.22.5",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

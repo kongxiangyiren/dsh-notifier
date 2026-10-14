@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "通知 (@kongxiangyiren/dsh-notifier)",
+    "description": "对话完成或需要你确认（审批/提问/计划评审）时，弹出 Windows 系统通知；可配置触发项、语言、声音与节奏。"
+  }
+}

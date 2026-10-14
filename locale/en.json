@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Notifier (@kongxiangyiren/dsh-notifier)",
+    "description": "Windows toast notifications when a turn finishes or your confirmation is needed (approval, question, plan review), with configurable triggers, language, sound and pacing."
+  }
+}

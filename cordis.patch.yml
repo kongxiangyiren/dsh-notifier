@@ -1,0 +1,11 @@
+# @kongxiangyiren/dsh-notifier 的 bundle patch：把 Host 插件行插入 profile 组合。
+# 通知行为可在 profile 自己的 cordis.patch.yml 里按 id 覆盖 config（用户 patch 层优先）。
+
+- insert:
+    - id: '@kongxiangyiren/dsh-notifier'
+      name: '@kongxiangyiren/dsh-notifier'
+      config:
+        # 临时改成 true 可在插件激活时发一条测试通知，用于验证投递链路。
+        onStartup: false
+        # 排障时填日志文件路径，可记录每次投递/撤回/点击回调的原始数据：
+        # debugLog: D:\code\dsh-notifier\notifier-debug.log
