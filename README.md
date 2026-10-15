@@ -11,7 +11,8 @@
 ## 它能做什么
 
 - **对话完成通知** — 一轮对话正常结束时提醒你；用户取消（`aborted`）、被阻塞、崩溃续接，以及宽限期内又开始了新一轮（比如 goal 自动续轮）都不会打扰你。
-- **需要确认时通知** — 审批请求（沙箱提权、命令批准等）与结构化提问（`ask_user_question`、计划评审）在你**尚未作答**时才提示；作答或取消后通知仅作提示，**不改变任何审批结果**。
+- **需要确认时通知** — 审批请求（沙箱提权、命令批准等）与结构化提问（`ask_user_question`、计划评审）在你**尚未作答**时才提示；作答或取消后通知仅作提示，**不改变任何审批结果**。确认类通知**不会被节流或合并吞掉**：两秒内连着来两条确认，就弹两条。
+- **你已经看着页面时就不打扰** — 网页在前台、且你刚刚（默认 1 分钟内）点过它时，一条通知都不弹：你本来就在看结果，页面上的卡片才是权威。窗口毫秒数可调，也可以整个关掉。
 - **审批双通道** — 提示出现时，**页面卡片和系统通知同时存在**，任一方作答即生效、另一方立刻消失：点通知上的按钮后，"等待审批"的页面卡片会自动移除；在页面里作答，通知横幅也会被撤回。不会出现一边已处理、另一边还挂着等待的残留。
 - **通知里直接审批** — 审批通知带 `Allow`（允许一次）/ `Deny`（拒绝）两个按钮，点击即完成审批。
 - **图形界面里改参数** — 侧边栏 → 插件 → 本插件，表单直接出现在插件页上，改动即时生效，无需重启（跟随明暗主题）。
@@ -62,7 +63,7 @@ npx @deepseek-ai/dsh plugin --profile web add @kongxiangyiren/dsh-notifier
   config:
     language: zh            # 默认即是 zh，可改 en
     titlePrefix: DSH        # 通知标题前缀
-    askCoalesceMs: 10000    # 同一会话内多条确认的合并窗口（默认 6000）
+    minIntervalMs: 2000     # 对话完成通知之间的最小间隔（默认 1000）
 ```
 
 | 键 | 默认 | 说明 |
@@ -79,9 +80,11 @@ npx @deepseek-ai/dsh plugin --profile web add @kongxiangyiren/dsh-notifier
 | `idleGraceMs` | `1200` | 轮次结束后等待多久再确认"确实空闲" |
 | `askGraceMs` | `800` | 询问你之后等待多久仍未作答才通知 |
 | `dedupeWindowMs` | `5000` | 同一触发键的去重窗口 |
-| `askCoalesceMs` | `6000` | 同一会话内多条确认的合并窗口（只弹第一条） |
-| `minIntervalMs` | `1000` | 两条通知之间的最小间隔 |
+| `askCoalesceMs` | `0` | 同一会话内确认合并窗口：`0` = 每条确认都弹；调大后**仅当**上一条确认通知还挂着且你还没处理它时，才合并掉紧随其后的确认 |
+| `minIntervalMs` | `1000` | 对话完成通知之间的最小间隔（确认类通知不受它约束，永远不会被节流丢掉） |
 | `dismissWhenAnswered` | `true` | 你作答后撤回对应的"待确认"通知（尽力而为） |
+| `stayQuietOnFocusedPage` | `true` | 网页在前台且你刚点过时不弹通知（页面上的卡片照旧出现） |
+| `focusedClickWindowMs` | `60000` | 「刚点过」的时间窗（毫秒）：最近一次点击在这个窗口内即视为人在页面前 |
 | `onStartup` | `false` | 插件激活时发一条测试通知，用于验证投递链路（下次加载插件时生效） |
 | `debugLog` | — | 诊断日志文件路径：记录每次投递、撤回与点击回调的原始数据（下次加载插件时生效） |
 
@@ -93,6 +96,12 @@ npx @deepseek-ai/dsh plugin --profile web add @kongxiangyiren/dsh-notifier
 
 **通知没弹出来？**
 先看 Windows 的通知设置：专注助手/勿扰会静音或丢弃 Toast，此时插件侧看不到错误。普通通知以 AUMID `dsh` 投递，Windows 会自动在「设置 → 系统 → 通知」里为它建一项，可单独开关（**不需要**手动注册什么应用）。
+
+**网页开着、我也在点，通知怎么不弹了？**
+这是「你在看的时候不打扰」的默认行为（`stayQuietOnFocusedPage`，窗口 1 分钟）：你就在页面前，页面上的卡片才是权威。想恢复"一律弹"，把这个开关关掉，或把 `focusedClickWindowMs` 设为 `0`。
+
+**两条确认挨着来（比如隔了两秒），只弹了一条？**
+默认不会了：`askCoalesceMs` 默认为 `0`，**每条确认都会弹**。只有把它调大，才会在"上一条确认的通知还挂在屏幕上、你还没处理它"时合并掉紧随其后的那一条——你一旦作答或划掉它，下一条立刻又会弹。另外确认类通知不受「最小间隔」约束，永远不会被节流丢掉。
 
 **通知上的按钮点不动？**
 只有约 7 秒的窗口期（横幅收起后处理进程已退出）。错过窗口时在页面卡片上作答，效果一样。
@@ -112,7 +121,7 @@ npx @deepseek-ai/dsh plugin --profile web add @kongxiangyiren/dsh-notifier
 pnpm install
 pnpm run build      # tsdown：Host dist/index.mjs + Client dist/client.js（含 sourcemap）
 pnpm run typecheck  # tsc --noEmit
-pnpm test           # vitest（67 个单测）
+pnpm test           # vitest（113 个单测）
 pnpm run dev        # tsdown --watch
 ```
 
@@ -125,6 +134,9 @@ src/locale.d.ts       # 把词典命名空间登记进 LocaleNamespaceMap（官�
 src/lib/config.ts     # 选项归一化（默认值、钳制、未知键忽略）+ 解开 volatile 访问器的 liveOptions()
 src/lib/messages.ts   # 单行折叠/截断、会话标签、中英文文案
 src/lib/pending.ts    # 宽限竞态、去重、全局最小间隔（注入时钟，便于单测）
+src/lib/presence.ts   # 「人在页面前」的协议与 Host 判定（两侧共用）
+src/lib/presence-channel.ts # Host 侧上报路由（webServer 最小结构面 + 可选浏览器会话认证）
+src/lib/presence-watch.ts   # Client 侧聚焦/可见性/点击监听与上报
 src/lib/signal.ts     # 共享审批请求的取消信号：让"通知作答"也能关掉页面卡片
 src/lib/dispatch.ts   # 三个触发的编排与撤回
 src/lib/notifier.ts   # node-notifier 封装（图标、按钮、点击映射；错误只记日志）
@@ -138,6 +150,7 @@ src/lib/client-css.ts # Client 表单样式与类名前缀
 - **配置可实时读取**：字段全部标注 schemastery 的 `.volatile()`，Harness 的 `settings` 服务只把 volatile 字段投影成可编辑表单；`apply()` 通过 `liveOptions()` 每次读取都取当前值。
 - **Client 半体的类型全部来自现成包**（`Context` / `DshWindow` / `ClientBundleRegistration` / `ConfigForm` / `Translate` / 槽位 props 等），不自己声明接口。
 - **双通道互撤**：插件把 `approval/request` 请求的 `signal` 换成"原信号 + 自己的控制器"，通知作答时取消它；网关随即向客户端推送 `cancel` 帧，页面卡片被移除。反向则由 `dismissWhenAnswered` 撤回通知。
+- **"你在不在页面前"由浏览器上报**：窗口是否聚焦、上次点击多久以前，只有浏览器知道，所以 Client 半体把 `{focused, clickAgeMs}` POST 到 Host 注册的精确路由 `/@kongxiangyiren/dsh-notifier/presence`，判定留在 Host 并按当前配置现算（页面里改窗口毫秒数即时生效）。走明文 HTTP 而不是 Remote/RPC 是有意的：Remote 的能力集合由应用在构建期固定，第三方 bundle 加不进去；而 `dsh-host-webserver` 的具名路由就是为功能插件准备的。上报的是**点击年龄**而不是时间戳，两端时钟不齐也不影响判定。
 - **样式**：只用 `--dsw-alias-*` 主题 token，不出现任何硬编码颜色（有单测守着：品牌色在深色主题里是近白色，写死白字会看不见）。
 
 ## 已知限制
@@ -148,6 +161,8 @@ src/lib/client-css.ts # Client 表单样式与类名前缀
 - 点击窗口约 7 秒：横幅收起（进入通知中心）后处理进程已退出，之后再点不会回传。
 - "作答后撤回通知"依赖 SnoreToast 的 `-close`，属于尽力而为，失败只写 debug 日志。
 - 计划内容等长文本不会整段展示，正文按 `maxBodyLength` 折叠为单行。
+- 「前台且刚点过就不打扰」只在带 web 服务器的组合里生效（`dsh web`）；CLI/TUI 或桌面壳没有这条路由时，行为与没有这项功能一样（该弹就弹）。
+- 只统计**指针点击**（`pointerdown`）：键盘输入、把页面切回前台本身都不刷新那 1 分钟窗口；多个标签页各自上报，以最后一次为准。
 - 仅针对 Windows 桌面通知做实现与验证。
 
 ## 许可

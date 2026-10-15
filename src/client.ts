@@ -4,6 +4,9 @@
  * 在「插件」列表页（bundle 页）直接提供配置表单：注册到槽位 `plugins.bundle.config`，
  * 键为**包名** `@kongxiangyiren/dsh-notifier`——该座位渲染在 bundle 页"描述与组件行之间"，不用点进详情。
  *
+ * 另外把「人在不在页面前」的事实上报给 Host 半体（`lib/presence-watch.ts`）：
+ * 页面聚焦、可见性与指针点击只有浏览器知道，Host 据此决定要不要弹系统通知。
+ *
  * 类型全部取自现成包，不自己声明：
  * - `@deepseek-ai/dsh-client-modules`：`DshWindow` / `ClientBundleRegistration`（模块装载器契约）
  * - `@deepseek-ai/dsh-client-ui-slots`：`Translate`（并增强 `ctx.slots`）
@@ -25,6 +28,7 @@ import type { PluginConfigViewProps } from '@deepseek-ai/dsh-client-ui-plugin-ma
 import type { LocaleDictOf, Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ReactElement } from 'react'
 import { CLIENT_CSS } from './lib/client-css'
+import { startPresenceWatch } from './lib/presence-watch'
 // 仅为加载 `Context` 增强：`ctx.slots`（renderer/client）与 `ctx.locale`（locale/client）。
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -80,6 +84,8 @@ const registration: ClientBundleRegistration = {
       'field.includeSubagents': '包含子代理会话的完成通知',
       'field.sound': '播放通知音',
       'field.dismissWhenAnswered': '作答后撤回通知',
+      'field.stayQuietOnFocusedPage': '页面在前台且刚点过时不弹通知',
+      'field.focusedClickWindowMs': '「刚点过」的时间窗（毫秒）',
       'field.onStartup': '激活时发测试通知（下次加载生效）',
       'field.language': '通知文案语言',
       'field.titlePrefix': '通知标题前缀',
@@ -88,8 +94,8 @@ const registration: ClientBundleRegistration = {
       'field.idleGraceMs': '完成后确认空闲的等待（毫秒）',
       'field.askGraceMs': '询问后等待作答（毫秒）',
       'field.dedupeWindowMs': '同一触发键去重窗口（毫秒）',
-      'field.askCoalesceMs': '同会话确认合并窗口（毫秒）',
-      'field.minIntervalMs': '两条通知最小间隔（毫秒）',
+      'field.askCoalesceMs': '同会话确认合并窗口（毫秒，0 = 每条都弹）',
+      'field.minIntervalMs': '对话完成通知最小间隔（毫秒）',
     }
     const en: LocaleDictOf<'@kongxiangyiren/dsh-notifier'> = {
       title: 'Notification settings',
@@ -110,6 +116,8 @@ const registration: ClientBundleRegistration = {
       'field.includeSubagents': 'Include subagent sessions',
       'field.sound': 'Play the notification sound',
       'field.dismissWhenAnswered': 'Dismiss the notification once answered',
+      'field.stayQuietOnFocusedPage': 'Stay quiet while the page is focused and just clicked',
+      'field.focusedClickWindowMs': 'Recent-click window (ms)',
       'field.onStartup': 'Send a test notification on activation (applies on next load)',
       'field.language': 'Notification copy language',
       'field.titlePrefix': 'Notification title prefix',
@@ -118,8 +126,8 @@ const registration: ClientBundleRegistration = {
       'field.idleGraceMs': 'Idle re-check delay (ms)',
       'field.askGraceMs': 'Ask grace before notifying (ms)',
       'field.dedupeWindowMs': 'Dedupe window (ms)',
-      'field.askCoalesceMs': 'Per-session coalesce window (ms)',
-      'field.minIntervalMs': 'Minimum interval between notifications (ms)',
+      'field.askCoalesceMs': 'Per-session coalesce window (ms, 0 = notify every confirmation)',
+      'field.minIntervalMs': 'Minimum interval between turn notifications (ms)',
     }
 
     /** 与 Host Config schema 一一对应的字段清单（标签走词典，`def` 用于回显与恢复）。 */
@@ -131,6 +139,8 @@ const registration: ClientBundleRegistration = {
       { key: 'includeSubagents', kind: 'boolean', def: false },
       { key: 'sound', kind: 'boolean', def: true },
       { key: 'dismissWhenAnswered', kind: 'boolean', def: true },
+      { key: 'stayQuietOnFocusedPage', kind: 'boolean', def: true },
+      { key: 'focusedClickWindowMs', kind: 'number', def: 60000, min: 0, max: 600000 },
       { key: 'onStartup', kind: 'boolean', def: false },
       { key: 'language', kind: 'enum', def: 'zh', options: ['zh', 'en'] },
       { key: 'titlePrefix', kind: 'text', def: 'DSH' },
@@ -139,7 +149,7 @@ const registration: ClientBundleRegistration = {
       { key: 'idleGraceMs', kind: 'number', def: 1200, min: 0, max: 60000 },
       { key: 'askGraceMs', kind: 'number', def: 800, min: 0, max: 60000 },
       { key: 'dedupeWindowMs', kind: 'number', def: 5000, min: 0, max: 600000 },
-      { key: 'askCoalesceMs', kind: 'number', def: 6000, min: 0, max: 600000 },
+      { key: 'askCoalesceMs', kind: 'number', def: 0, min: 0, max: 600000 },
       { key: 'minIntervalMs', kind: 'number', def: 1000, min: 0, max: 600000 },
     ]
 
@@ -370,6 +380,16 @@ const registration: ClientBundleRegistration = {
       apply(ctx: Context): void {
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), '@kongxiangyiren/dsh-notifier: dictionaries')
         const t = ctx.locale.bind(NS)
+
+        // 「人在页面前」的上报：只有浏览器知道本页是否聚焦、上次点击是多久以前，
+        // Host 半体据此决定要不要弹通知（协议与判定见 src/lib/presence.ts）。
+        ctx.effect(
+          () =>
+            startPresenceWatch({
+              log: (message) => ctx.logger.debug(`@kongxiangyiren/dsh-notifier: ${message}`),
+            }),
+          '@kongxiangyiren/dsh-notifier: presence reporting',
+        )
 
         // 「插件」列表页：bundle 页"描述与组件行之间"的座位，键为包名。
         // owner 不带 form，所以自己从 client 的 configForms 服务取表单。

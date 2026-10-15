@@ -84,3 +84,30 @@ test('gate 做同键去重与全局最小间隔', () => {
   now = 6000
   expect(gate.allow('a')).toBe(true)
 })
+
+test('pace: false 的调用不受全局最小间隔约束（确认类通知不会被节流丢掉）', () => {
+  let now = 0
+  const gate = createGate({ windowMs: 5000, minIntervalMs: 1000, now: () => now })
+
+  expect(gate.allow('ask:1', { pace: false })).toBe(true)
+  now = 100
+  expect(gate.allow('ask:2', { pace: false })).toBe(true)
+  now = 200
+  expect(gate.allow('ask:3', { pace: false })).toBe(true)
+  // 也不该因此占用"上一条通知"的位置：对话完成通知仍按自己的节奏走。
+  expect(gate.allow('turn:1')).toBe(true)
+  now = 300
+  expect(gate.allow('turn:2')).toBe(false)
+})
+
+test('被最小间隔挡下时不记键：同一键稍后仍然可以发', () => {
+  let now = 0
+  const gate = createGate({ windowMs: 5000, minIntervalMs: 1000, now: () => now })
+
+  expect(gate.allow('turn:1')).toBe(true)
+  now = 100
+  expect(gate.allow('turn:2')).toBe(false) // 过密，被挡下
+  now = 1100
+  // 旧实现在被节流时也记了键，于是这里会被去重窗口再挡 5 秒；现在不会。
+  expect(gate.allow('turn:2')).toBe(true)
+})

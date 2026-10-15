@@ -77,13 +77,19 @@ export function createPendingTracker(input: { graceMs: number; scheduler: Schedu
 }
 
 export interface Gate {
-  /** 该键此刻是否允许发出通知。 */
-  allow(key: string): boolean
+  /**
+   * 该键此刻是否允许发出通知。
+   * @param key 去重键。
+   * @param options 可选：`pace: false` 表示不受全局最小间隔约束——确认类通知用它，
+   *   因为"需要用户作答"的提示一旦被节流丢掉，就等于丢了一次请求。
+   */
+  allow(key: string, options?: { pace?: boolean }): boolean
 }
 
 /**
  * 去重 + 全局最小间隔。
- * 同键在窗口内重复、或距上一条通知不足最小间隔时返回 false。
+ * 同键在窗口内重复返回 false；距上一条通知不足最小间隔时返回 false
+ * （被最小间隔挡下时**不**记键：那只是"过密"，不是重复，同一键稍后仍应能发）。
  * @param input 窗口毫秒数、最小间隔毫秒数与时钟。
  */
 export function createGate(input: { windowMs: number; minIntervalMs: number; now: () => number }): Gate {
@@ -96,16 +102,14 @@ export function createGate(input: { windowMs: number; minIntervalMs: number; now
   }
 
   return {
-    allow(key) {
+    allow(key, options = {}) {
       const now = input.now()
       const previous = lastByKey.get(key)
       if (previous !== undefined && now - previous < input.windowMs) return false
-      if (now - lastAny < input.minIntervalMs) {
-        lastByKey.set(key, now)
-        return false
-      }
+      const pace = options.pace !== false
+      if (pace && now - lastAny < input.minIntervalMs) return false
       lastByKey.set(key, now)
-      lastAny = now
+      if (pace) lastAny = now
       prune(now)
       return true
     },

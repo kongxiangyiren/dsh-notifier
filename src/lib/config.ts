@@ -27,12 +27,16 @@ export interface Options {
   askGraceMs: number
   /** 同一触发键的去重窗口（毫秒）。 */
   dedupeWindowMs: number
-  /** 同一会话内多条确认的合并窗口（毫秒）。 */
+  /** 同一会话内多条确认的合并窗口（毫秒）：0 = 每条确认都弹（默认）。 */
   askCoalesceMs: number
-  /** 两条通知之间的全局最小间隔（毫秒）。 */
+  /** 对话完成通知之间的全局最小间隔（毫秒）；确认类通知不受它约束。 */
   minIntervalMs: number
   /** 用户作答后是否撤回对应的"待确认"通知。 */
   dismissWhenAnswered: boolean
+  /** 网页在前台且用户刚点过时不弹通知（页面上的卡片照旧出现）。 */
+  stayQuietOnFocusedPage: boolean
+  /** "刚点过"的时间窗（毫秒）：最近一次指针点击在这个窗口内即视为人在页面前。 */
+  focusedClickWindowMs: number
   /** 插件激活时发一条测试通知（用于验证投递链路）。 */
   onStartup: boolean
   /** 诊断日志文件路径：记录每次投递、撤回与点击回调（默认关闭）。 */
@@ -52,9 +56,11 @@ export const DEFAULTS: Options = {
   idleGraceMs: 1200,
   askGraceMs: 800,
   dedupeWindowMs: 5000,
-  askCoalesceMs: 6000,
+  askCoalesceMs: 0,
   minIntervalMs: 1000,
   dismissWhenAnswered: true,
+  stayQuietOnFocusedPage: true,
+  focusedClickWindowMs: 60_000,
   onStartup: false,
 }
 
@@ -66,6 +72,7 @@ const BOOLEAN_KEYS = [
   'includeSubagents',
   'sound',
   'dismissWhenAnswered',
+  'stayQuietOnFocusedPage',
   'onStartup',
 ] as const satisfies readonly (keyof Options)[]
 
@@ -76,6 +83,7 @@ const NUMBER_LIMITS = {
   dedupeWindowMs: [0, 600_000],
   askCoalesceMs: [0, 600_000],
   minIntervalMs: [0, 600_000],
+  focusedClickWindowMs: [0, 600_000],
 } as const satisfies Record<string, readonly [number, number]>
 
 type BooleanKey = (typeof BOOLEAN_KEYS)[number]

@@ -17,6 +17,8 @@ import { liveOptions } from './lib/config'
 import { createDispatcher, type AgentLike, type AgentStatus, type SessionEventLike, type SessionLike } from './lib/dispatch'
 import { createNotifier } from './lib/notifier'
 import { systemScheduler } from './lib/pending'
+import { createPresenceTracker } from './lib/presence'
+import { registerPresenceRoute, type ConnectionGuardLike, type WebServerLike } from './lib/presence-channel'
 import type { LoggerLike } from './lib/types'
 
 /** Cordis 插件名（诊断用）。 */
@@ -43,9 +45,19 @@ export const Config = z.object({
   idleGraceMs: z.natural().default(1200).volatile().description('轮次结束后确认"确实空闲"的等待毫秒数'),
   askGraceMs: z.natural().default(800).volatile().description('询问用户后等待作答的毫秒数，超时才通知'),
   dedupeWindowMs: z.natural().default(5000).volatile().description('同一触发键的去重窗口（毫秒）'),
-  askCoalesceMs: z.natural().default(6000).volatile().description('同一会话内多条确认的合并窗口（毫秒）'),
-  minIntervalMs: z.natural().default(1000).volatile().description('两条通知之间的最小间隔（毫秒）'),
+  askCoalesceMs: z
+    .natural()
+    .default(0)
+    .volatile()
+    .description('同一会话内确认合并窗口（毫秒）：0 = 每条确认都弹；调大则上一条还挂着时合并掉紧随其后的确认'),
+  minIntervalMs: z.natural().default(1000).volatile().description('对话完成通知之间的最小间隔（毫秒）；确认类通知不受它约束'),
   dismissWhenAnswered: z.boolean().default(true).volatile().description('用户作答后撤回对应的待确认通知'),
+  stayQuietOnFocusedPage: z
+    .boolean()
+    .default(true)
+    .volatile()
+    .description('网页在前台且你刚点过时不弹系统通知（页面上的卡片照旧出现）'),
+  focusedClickWindowMs: z.natural().default(60000).volatile().description('「刚点过」的时间窗（毫秒），默认 1 分钟'),
   onStartup: z.boolean().default(false).volatile().description('插件激活时发一条测试通知（验证投递链路）'),
   debugLog: z.string().volatile().description('诊断日志文件路径：记录投递、撤回与点击回调的原始数据'),
 })
@@ -84,11 +96,20 @@ export function apply(ctx: Context, config: unknown): void {
     iconPath: resolveIconPath(),
     debugLog: options.debugLog,
   })
+
+  // 「人在页面前吗」：事实由 Client 半体上报（见 lib/presence.ts 的协议），
+  // 判定在此处按当前配置现算，所以页面里改窗口毫秒数即时生效。
+  const scheduler = systemScheduler()
+  const presence = createPresenceTracker()
+  const shouldStayQuiet = (): boolean =>
+    options.stayQuietOnFocusedPage && presence.shouldStayQuiet(scheduler.now(), options.focusedClickWindowMs)
+
   const dispatcher = createDispatcher({
     options,
     notifier,
     logger,
-    scheduler: systemScheduler(),
+    scheduler,
+    shouldStayQuiet,
     titleOf: (session) => ctx.get('sessionTitle')?.get(session as unknown as Session)?.title,
     statusOf: (sessionId): AgentStatus | undefined => {
       const agents = ctx.get('agents')
@@ -103,9 +124,33 @@ export function apply(ctx: Context, config: unknown): void {
     () => () => {
       dispatcher.dispose()
       notifier.dispose()
+      presence.clear()
     },
     '@kongxiangyiren/dsh-notifier: notifier and timers',
   )
+
+  // 在场判定的上报入口。只依赖 dsh-host-webserver 的最小结构面：组合里没有它时
+  // （CLI/TUI、桌面壳）这段不运行，判定恒为"不在场"，通知行为与从前完全一致。
+  // 浏览器会话认证由 dsh-client-connection 提供；它不在时路由退化为同源检查。
+  ctx.inject(['webServer'], (scope) => {
+    const webServer = scope.get('webServer') as WebServerLike | undefined
+    if (webServer === undefined) return
+    // 认证栅栏**按请求现取**：connection 行要等 webRuntime，可能比 webserver 出现得晚，
+    // 注册时取一次会永远拿到 undefined。
+    const authFence: ConnectionGuardLike = {
+      requestRejection: (request) =>
+        (scope.get('connection') as ConnectionGuardLike | undefined)?.requestRejection(request),
+    }
+    const dispose = registerPresenceRoute({
+      webServer,
+      presence,
+      logger,
+      now: () => scheduler.now(),
+      quiet: shouldStayQuiet,
+      guard: authFence,
+    })
+    scope.effect(() => dispose, '@kongxiangyiren/dsh-notifier: presence route')
+  })
 
   // 轮次结束：durable 的 session/event，只看 turn/end。
   ctx.on('session/event', (session, event) => {

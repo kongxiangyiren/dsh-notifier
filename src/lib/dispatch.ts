@@ -42,6 +42,11 @@ export interface DispatchDeps {
   notifier: Notifier
   logger: LoggerLike
   scheduler: Scheduler
+  /**
+   * 此刻是否应保持安静（页面在前台且用户刚点过，见 `presence.ts`）。
+   * 返回 true 时**不投递**通知：页面上的卡片照旧出现，用户本来就在看它们。
+   */
+  shouldStayQuiet?: (() => boolean) | undefined
   /** 会话标题（可选服务）。 */
   titleOf?: (session: SessionLike) => string | undefined
   /** Agent 当前状态；返回 undefined 表示无法判定（此时按空闲处理）。 */
@@ -121,7 +126,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   const { options, notifier, logger, scheduler } = deps
   const gate = createGate({ windowMs: options.dedupeWindowMs, minIntervalMs: options.minIntervalMs, now: () => scheduler.now() })
   const pending = createPendingTracker({ graceMs: options.askGraceMs, scheduler })
-  const askAt = new Map<string, number>()
+  /** 每个会话最近一条**已投递**的确认通知。 */
+  const askLive = new Map<string, { key: string; at: number }>()
   const liveIds = new Map<string, number>()
 
   const labelOf = (session: SessionLike | undefined): string | undefined => {
@@ -132,8 +138,40 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   const isSubagent = (session: SessionLike): boolean =>
     session.header?.origin === 'subagent' || (session.header?.delegationDepth ?? 0) > 0
 
+  /**
+   * 同会话确认合并：**只有**在"上一条确认真的投递出去了、用户还没处理它、且距它不超过
+   * {@link Options.askCoalesceMs}"时才不弹第二条。
+   *
+   * 这样才不会吞掉真正的新确认：上一条被"页面在前台"跳过、投递失败、或者用户已经作答/划掉，
+   * 下一条都会照常弹。合并窗口默认 0（每条确认都弹），调大它才启用合并。
+   */
+  const isMergedAsk = (request: NotificationRequest): boolean => {
+    if (request.kind === 'turn') return false
+    const windowMs = options.askCoalesceMs
+    if (windowMs <= 0) return false
+    const sessionId = request.sessionId
+    if (sessionId === undefined) return false
+    const previous = askLive.get(sessionId)
+    if (previous === undefined) return false
+    if (!liveIds.has(previous.key)) {
+      askLive.delete(sessionId)
+      return false
+    }
+    return scheduler.now() - previous.at < windowMs
+  }
+
   const emit = (request: NotificationRequest): number | undefined => {
-    if (!gate.allow(request.key)) {
+    // 人就在页面前（前台 + 刚点过）：通知是多余的打扰，跳过——不占用去重窗口与最小间隔。
+    if (deps.shouldStayQuiet?.() === true) {
+      logger.debug(`@kongxiangyiren/dsh-notifier: 跳过通知，页面在前台且刚有点击（${request.key}）`)
+      return undefined
+    }
+    if (isMergedAsk(request)) {
+      logger.debug(`@kongxiangyiren/dsh-notifier: 跳过同会话重复的确认通知（${request.key}）`)
+      return undefined
+    }
+    // 确认类通知不受全局最小间隔约束：被节流掉就等于丢了一次"需要你作答"的请求。
+    if (!gate.allow(request.key, { pace: request.kind === 'turn' })) {
       logger.debug(`@kongxiangyiren/dsh-notifier: 跳过重复/过密通知（${request.key}）`)
       return undefined
     }
@@ -144,7 +182,15 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       logger.warn(`@kongxiangyiren/dsh-notifier: 投递通知失败：${String(error)}`)
       return undefined
     }
-    if (id > 0) liveIds.set(request.key, id)
+    if (id > 0) {
+      liveIds.set(request.key, id)
+      if (request.kind !== 'turn' && request.sessionId !== undefined) {
+        askLive.set(request.sessionId, { key: request.key, at: scheduler.now() })
+        if (askLive.size > 200) {
+          for (const [sessionId, entry] of askLive) if (!liveIds.has(entry.key)) askLive.delete(sessionId)
+        }
+      }
+    }
     logger.info(`@kongxiangyiren/dsh-notifier: 已发出通知（${request.kind}, ${request.key}）`)
     return id
   }
@@ -158,17 +204,9 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     }
   }
 
-  /** 同会话内的多条确认只通知第一条。 */
-  const rememberAsk = (sessionId: string | undefined): boolean => {
-    if (sessionId === undefined) return true
-    const now = scheduler.now()
-    const previous = askAt.get(sessionId)
-    if (previous !== undefined && now - previous < options.askCoalesceMs) return false
-    askAt.set(sessionId, now)
-    if (askAt.size > 200) {
-      for (const [id, at] of askAt) if (now - at > options.askCoalesceMs) askAt.delete(id)
-    }
-    return true
+  /** 通知已消失（被划掉/超时/点掉）或已作答：不再算"还挂着"。 */
+  const forgetLive = (key: string): void => {
+    liveIds.delete(key)
   }
 
   const onTurnEnd = (session: SessionLike, event: SessionEventLike): void => {
@@ -263,7 +301,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       if (outcome !== undefined) return
       finish(() => {
         if (options.dismissWhenAnswered) dismissId(liveIds.get(input.key) ?? 0)
-        liveIds.delete(input.key)
+        forgetLive(input.key)
       })
     }
     void viaPage.then(closeToast, closeToast)
@@ -278,11 +316,15 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         const result: ApprovalOutcomeLike = index === 0 ? 'allowed-once' : 'rejected'
         finish(() => {
           logger.info(`@kongxiangyiren/dsh-notifier: 通知按钮作答（${result}, ${input.key}）`)
+          // 已作答：这条不再"挂着"，同会话的下一条确认该正常弹。
+          forgetLive(input.key)
           // 先确立通知结果，再取消页面请求（顺序不可颠倒）。
           decideFromToast?.(result)
           input.onAnsweredByToast?.()
         })
       },
+      // 划掉/超时/点空白：通知已经消失，不再阻塞同会话的下一条确认。
+      onClosed: () => forgetLive(input.key),
     })
 
     if (id === undefined) {
@@ -294,7 +336,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   }
 
   /**
-   * 审批与提问的公共处理：开关、会话内合并、文案与稳定键。
+   * 审批与提问的公共处理：开关、文案与稳定键（合并判定在 {@link emit} 里，按"上一条是否还挂着"决定）。
    * @param kind 触发类别。
    * @param input 触发输入。
    * @returns 应当作为 waterfall 结果的 Promise。
@@ -313,11 +355,6 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
 
     const subject = kind === 'approval' ? (callId ?? toolName) : (callId ?? questions[0]?.id ?? '?')
     const key = `${kind}:${sessionId ?? '-'}:${subject}`
-
-    if (!rememberAsk(sessionId)) {
-      logger.debug(`@kongxiangyiren/dsh-notifier: 跳过同会话内重复的确认通知（${key}）`)
-      return settled
-    }
 
     const label = labelOf(session)
     const hash =
@@ -343,11 +380,18 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     // 提问：网页面板照常出现，通知只提示、并在作答后撤回。
     pending.watch(key, settled, {
       onFire: () => {
-        emit({ kind: kind as NotifyKind, key, sessionId, ...hash })
+        emit({
+          kind: kind as NotifyKind,
+          key,
+          sessionId,
+          ...hash,
+          // 通知被划掉/超时：已经提醒过、也消失了，不再阻塞同会话的下一条确认。
+          onClosed: () => forgetLive(key),
+        })
       },
       onSettle: () => {
         const id = liveIds.get(key)
-        liveIds.delete(key)
+        forgetLive(key)
         if (id !== undefined && options.dismissWhenAnswered) dismissId(id)
       },
     })
@@ -376,7 +420,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     dispose() {
       pending.cancelAll()
       liveIds.clear()
-      askAt.clear()
+      askLive.clear()
     },
   }
 }

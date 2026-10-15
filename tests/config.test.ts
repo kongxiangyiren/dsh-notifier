@@ -35,6 +35,7 @@ test('数值字段取整并钳制到范围内', () => {
     maxBodyLength: 10.6,
     minIntervalMs: 1.4,
     dedupeWindowMs: 0,
+    focusedClickWindowMs: 60_000.6,
   })
 
   expect(options.idleGraceMs).toBe(0)
@@ -42,6 +43,19 @@ test('数值字段取整并钳制到范围内', () => {
   expect(options.maxBodyLength).toBe(20)
   expect(options.minIntervalMs).toBe(1)
   expect(options.dedupeWindowMs).toBe(0)
+  expect(options.focusedClickWindowMs).toBe(60_001)
+})
+
+test('"页面在前台且刚点过就不弹"默认开启、窗口默认 1 分钟，可关可调', () => {
+  expect(DEFAULTS.stayQuietOnFocusedPage).toBe(true)
+  expect(DEFAULTS.focusedClickWindowMs).toBe(60_000)
+
+  const off = resolveOptions({ stayQuietOnFocusedPage: false, focusedClickWindowMs: 0 })
+  expect(off.stayQuietOnFocusedPage).toBe(false)
+  expect(off.focusedClickWindowMs).toBe(0)
+
+  const capped = resolveOptions({ focusedClickWindowMs: 9_999_999 })
+  expect(capped.focusedClickWindowMs).toBe(600_000)
 })
 
 test('未知键与空白字符串被忽略', () => {

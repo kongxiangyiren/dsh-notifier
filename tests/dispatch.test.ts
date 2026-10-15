@@ -7,7 +7,7 @@ import { fakeLogger, fakeNotifier, fakeScheduler, flush, throwingNotifier } from
 const session: SessionLike = { id: 's1', header: { cwd: 'D:\\code\\demo' } }
 const childSession: SessionLike = { id: 's2', header: { cwd: 'D:\\code\\demo', origin: 'subagent', delegationDepth: 1 } }
 
-function setup(overrides: Record<string, unknown> = {}, status: AgentStatus | undefined = 'idle') {
+function setup(overrides: Record<string, unknown> = {}, status: AgentStatus | undefined = 'idle', quiet = false) {
   const scheduler = fakeScheduler()
   const notifier = fakeNotifier()
   const logger = fakeLogger()
@@ -17,6 +17,7 @@ function setup(overrides: Record<string, unknown> = {}, status: AgentStatus | un
     notifier,
     logger,
     scheduler,
+    shouldStayQuiet: () => quiet,
     titleOf: () => 'demo-session',
     statusOf: () => status,
   })
@@ -241,15 +242,85 @@ test('通知投递不可用时只走页面', async () => {
   expect(hook.state.calls).toBe(0)
 })
 
-test('同一会话内的多条确认只弹第一条通知，第二条只走页面', () => {
-  const t = setup({ askCoalesceMs: 6000, minIntervalMs: 0 })
+test('默认（askCoalesceMs=0）两次确认紧挨着也各弹一条', () => {
+  const t = setup({ minIntervalMs: 1000 })
   const first = pageAnswer()
   const second = pageAnswer()
 
   void t.dispatcher.answerApproval({ agent: { session }, payload: { toolName: 'a', callId: 'c1' }, settled: first.settled })
+  t.scheduler.advance(200)
   void t.dispatcher.answerApproval({ agent: { session }, payload: { toolName: 'b', callId: 'c2' }, settled: second.settled })
 
+  expect(t.notifier.sent).toHaveLength(2)
+})
+
+test('开启合并窗口时：上一条通知还挂着才合并，用户处理掉之后下一条立刻弹', async () => {
+  const t = setup({ askCoalesceMs: 6000, minIntervalMs: 0 })
+
+  // 第一条投递成功 → 还挂着 → 3 秒内的第二条被合并（这是这个开关的本意：不叠两条横幅）。
+  const first = pageAnswer()
+  void t.dispatcher.answerApproval({ agent: { session }, payload: { toolName: 'a', callId: 'c1' }, settled: first.settled })
+  t.scheduler.advance(3000)
+  const second = pageAnswer()
+  void t.dispatcher.answerApproval({ agent: { session }, payload: { toolName: 'b', callId: 'c2' }, settled: second.settled })
   expect(t.notifier.sent).toHaveLength(1)
+
+  // 用户把第一条处理掉（页面作答 → 通知被撤回）→ 第三条必须弹，不能被窗口吞掉。
+  first.answer('allowed-once')
+  await flush()
+  t.scheduler.advance(500)
+  const third = pageAnswer()
+  void t.dispatcher.answerApproval({ agent: { session }, payload: { toolName: 'c', callId: 'c3' }, settled: third.settled })
+  expect(t.notifier.sent).toHaveLength(2)
+})
+
+test('被"前台保持安静"跳过的确认不占用合并窗口（离开页面后紧接着的确认照弹）', async () => {
+  const scheduler = fakeScheduler()
+  const notifier = fakeNotifier()
+  let quiet = true
+  const dispatcher = createDispatcher({
+    options: resolveOptions({ ...DEFAULTS, askCoalesceMs: 6000, minIntervalMs: 0 }),
+    notifier,
+    logger: fakeLogger(),
+    scheduler,
+    shouldStayQuiet: () => quiet,
+    titleOf: () => 'demo',
+    statusOf: () => 'idle',
+  })
+
+  // 人在页面：第一条被安静规则跳过（没投递 → 不该算"更挂着"）。
+  const first = pageAnswer()
+  void dispatcher.answerApproval({ agent: { session }, payload: { toolName: 'a', callId: 'c1' }, settled: first.settled })
+  expect(notifier.sent).toHaveLength(0)
+
+  // 人离开了页面，1 秒后第二条确认到来：必须弹，而不是被合并窗口吞掉。
+  quiet = false
+  scheduler.advance(1000)
+  const second = pageAnswer()
+  void dispatcher.answerApproval({ agent: { session }, payload: { toolName: 'b', callId: 'c2' }, settled: second.settled })
+
+  expect(notifier.sent).toHaveLength(1)
+  expect(notifier.sent[0]?.key).toBe('approval:s1:c2')
+})
+
+test('从通知按钮作答后，同会话的下一条确认不再被合并窗口挡住', async () => {
+  const t = setup({ askCoalesceMs: 6000, minIntervalMs: 0 })
+
+  const first = pageAnswer()
+  const answer = t.dispatcher.answerApproval({
+    agent: { session },
+    payload: { toolName: 'a', callId: 'c1' },
+    settled: first.settled,
+  })
+  expect(t.notifier.sent).toHaveLength(1)
+
+  // 直接点通知上的 Allow：这条通知已经用掉了，不该再"挂着"。
+  t.notifier.sent[0]?.onAction?.(0)
+  await expect(answer).resolves.toBe('allowed-once')
+
+  const second = pageAnswer()
+  void t.dispatcher.answerApproval({ agent: { session }, payload: { toolName: 'b', callId: 'c2' }, settled: second.settled })
+  expect(t.notifier.sent).toHaveLength(2)
 })
 
 test('开关关闭时不弹通知，直接返回页面结果', async () => {
@@ -339,4 +410,64 @@ test('残缺或异常载荷不抛异常', () => {
     void t.dispatcher.notifyQuestion({ payload: { questions: 'nope' }, settled: page.settled })
   }).not.toThrow()
   t.scheduler.advance(5000)
+})
+
+test('页面在前台且刚点过：完成通知不弹，但仍照常判定空闲', () => {
+  const t = setup({ idleGraceMs: 100 }, 'idle', true)
+  t.dispatcher.onSessionEvent(session, turnEnd(3, 'completed'))
+  t.scheduler.advance(5000)
+  expect(t.notifier.sent).toHaveLength(0)
+})
+
+test('页面在前台且刚点过：审批只走页面卡片，通知不弹', async () => {
+  const t = setup({}, 'idle', true)
+  const page = pageAnswer()
+  const hook = toastHook()
+  const answer = t.dispatcher.answerApproval({
+    agent: { session },
+    payload: { toolName: 'pwsh', callId: 'c9' },
+    settled: page.settled,
+    onAnsweredByToast: hook.onAnsweredByToast,
+  })
+
+  expect(t.notifier.sent).toHaveLength(0)
+  expect(t.notifier.dismissed).toEqual([])
+
+  page.answer('allowed-once')
+  await expect(answer).resolves.toBe('allowed-once')
+  expect(hook.state.calls).toBe(0)
+})
+
+test('页面在前台且刚点过：提问提示也不弹', () => {
+  const t = setup({ askGraceMs: 100 }, 'idle', true)
+  const page = pageAnswer()
+  void t.dispatcher.notifyQuestion({ agent: { session }, payload: { questions: [{ id: 'q1', question: '选哪个？' }] }, settled: page.settled })
+  t.scheduler.advance(5000)
+  expect(t.notifier.sent).toHaveLength(0)
+})
+
+test('被"保持安静"跳过的通知不占用去重窗口与最小间隔', () => {
+  const scheduler = fakeScheduler()
+  const notifier = fakeNotifier()
+  let quiet = true
+  const dispatcher = createDispatcher({
+    options: resolveOptions({ ...DEFAULTS, idleGraceMs: 100, dedupeWindowMs: 5000, minIntervalMs: 1000 }),
+    notifier,
+    logger: fakeLogger(),
+    scheduler,
+    shouldStayQuiet: () => quiet,
+    titleOf: () => 'demo',
+    statusOf: () => 'idle',
+  })
+
+  // 安静期：同一个轮次键被跳过。
+  dispatcher.onSessionEvent(session, turnEnd(7, 'completed'))
+  scheduler.advance(100)
+  expect(notifier.sent).toHaveLength(0)
+
+  // 同一键随后（去重窗口内）再次触发：没被跳过的那次占用的窗口不该阻塞它。
+  quiet = false
+  dispatcher.onSessionEvent(session, turnEnd(7, 'completed'))
+  scheduler.advance(100)
+  expect(notifier.sent).toHaveLength(1)
 })
