@@ -1,7 +1,7 @@
 {
   "name": "@kongxiangyiren/dsh-notifier",
   "type": "module",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "在对话完成或需要用户确认时发出 Windows 系统通知的 DeepSeek Harness 插件 (Windows toast notifications when a turn finishes or your confirmation is needed)",
   "license": "MIT",
   "keywords": [
