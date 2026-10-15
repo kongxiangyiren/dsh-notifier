@@ -36,7 +36,6 @@ export default defineConfig([
     target: 'es2022',
     outDir: 'dist',
     clean: false,
-    dts: false,
-    sourcemap: true
+    dts: false
   }
 ]);
